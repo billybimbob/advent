@@ -5,8 +5,6 @@ from collections import Counter
 from collections.abc import Iterable
 from typing import NamedTuple
 
-ROLL_SPOT = "@"
-
 
 class Coordinate(NamedTuple):
     x: int
@@ -26,7 +24,7 @@ def count_accessible_rolls(rolls_map_path) -> int:
                 max_y += 1
 
             for x, spot in enumerate(line):
-                if spot != ROLL_SPOT:
+                if spot != "@":
                     continue
 
                 for adj_pos in adjacent_positions(x, y):
