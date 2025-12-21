@@ -45,60 +45,60 @@ def find_largest_area(tile_positions: list[Position], only_outline: bool) -> int
     if allowed_tiles is not None and not allowed_tiles:
         return 0
 
-    return max(get_area(p) for p in get_tile_pairs(tile_positions, allowed_tiles))
+    max_area = 0
 
+    for pair in get_tile_pairs(tile_positions):
+        area = get_area(pair)
+        if area <= max_area:
+            continue
 
-def is_inside(num_collisions: int) -> bool:
-    return num_collisions % 2 == 1
+        if allowed_tiles is None:
+            max_area = area
+            continue
+
+        start_x, end_x = (a.x, b.x) if a.x <= b.y else (b.x, a.x)
+        all_allowed_x = all(
+            Position(x, a.y) in allowed_tiles and
+            Position(x, b.y) in allowed_tiles
+            for x in range(start_x, end_x + 1)
+        )
+
+        if not all_allowed_x:
+            continue
+
+        start_y, end_y = (a.y, b.y) if a.y <= b.y else (b.y, a.y)
+        all_allowed_y = all(
+            Position(a.x, y) in allowed_tiles and
+            Position(b.x, y) in allowed_tiles
+            for y in range(start_y, end_y + 1)
+        )
+
+        if not all_allowed_y:
+            continue
+
+        max_area = area
+
+    return max_area
 
 
 def get_area(pair: PositionPair) -> int:
     a, b = pair
     x_dist = abs(a.x - b.x) + 1
     y_dist = abs(a.y - b.y) + 1
-
     return x_dist * y_dist
 
 
-def get_tile_pairs(
-    tile_positions: list[Position], allowed_tiles: Optional[set[Position]]
-) -> Iterable[PositionPair]:
-    tile_positions = sorted(tile_positions)
-    print('generating pairs')
+def is_inside(num_collisions: int) -> bool:
+    return num_collisions % 2 == 1
 
+
+def get_tile_pairs(tile_positions: list[Position]) -> Iterable[PositionPair]:
+    tile_positions = sorted(tile_positions)
     for i in range(len(tile_positions)):
         a = tile_positions[i]
         for j in range(i, len(tile_positions)):
             b = tile_positions[j]
-
-            if allowed_tiles is None:
-                yield PositionPair(a, b)
-                continue
-
-            start_x, end_x = (a.x, b.x) if a.x <= b.y else (b.x, a.x)
-            all_allowed_x = all(
-                Position(x, a.y) in allowed_tiles and
-                Position(x, b.y) in allowed_tiles
-                for x in range(start_x, end_x + 1)
-            )
-
-            if not all_allowed_x:
-                continue
-
-            start_y, end_y = (a.y, b.y) if a.y <= b.y else (b.y, a.y)
-            all_allowed_y = all(
-                Position(a.x, y) in allowed_tiles and
-                Position(b.x, y) in allowed_tiles
-                for y in range(start_y, end_y + 1)
-            )
-
-            if not all_allowed_y:
-                continue
-
             yield PositionPair(a, b)
-
-    print('finished with pairs')
-
 
 def trace_outline(tile_positions: list[Position]) -> Optional[list[Position]]:
     positions_by_x = defaultdict[int, list[Position]](list)
@@ -166,6 +166,8 @@ def fill_outline(outline_positions: Optional[set[Position]]) -> set[Position]:
 
     if not outline_positions:
         return fill_positions
+
+    return fill_positions
 
     outline_by_y = dict[int, set[int]]()
 
