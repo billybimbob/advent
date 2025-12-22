@@ -16,12 +16,17 @@ class PositionPair(NamedTuple):
     b: Position
 
 
+class Range(NamedTuple):
+    low: int
+    high: int
+
+
 def read_tile_positions(tile_map_path: str) -> list[Position]:
     positions = list[Position]()
 
-    with open(tile_map_path, 'r') as f:
+    with open(tile_map_path, "r") as f:
         for line in f:
-            match = re.match(r'^(\d+),(\d+)$', line)
+            match = re.match(r"^(\d+),(\d+)$", line)
             if match:
                 x = int(match[1])
                 y = int(match[2])
@@ -30,211 +35,188 @@ def read_tile_positions(tile_map_path: str) -> list[Position]:
     return positions
 
 
-def find_largest_area(tile_positions: list[Position], only_outline: bool) -> int:
+def find_largest_area_all(tile_positions: list[Position]) -> int:
+    return (
+        max(area(pair) for pair in get_tile_pairs(tile_positions))
+        if len(tile_positions) > 1
+        else 0
+    )
+
+
+def find_largest_area_outline(tile_positions: list[Position]) -> int:
     if len(tile_positions) <= 1:
         return 0
 
-    if only_outline:
-        outline = trace_outline(tile_positions)
-        x_bounds = get_x_bounds(outline)
-    else:
-        x_bounds = None
-
-    if only_outline and not x_bounds:
+    outline = trace_outline(tile_positions)
+    if not outline:
         return 0
 
+    x_options = sorted({x for x, _ in tile_positions})
+    y_options = sorted({y for _, y in tile_positions})
+
+    y_edges = map_edges(tile_positions, y_options)
+    inside_map = list[list[bool]]()
+
+    for y in y_options:
+        row = list[bool]()
+        inside_map.append(row)
+
+        for x in x_options:
+            pos = Position(x, y)
+
+            if pos in outline:
+                row.append(True)
+            elif is_inside(x, y, y_edges):
+                row.append(True)
+            else:
+                row.append(False)
+
     max_area = 0
-    print('getting max area')
-
-    tile_cache = dict[Position, bool]()
-    count = 0
-
-    def is_tile(x: int, y: int) -> bool:
-        if not outline:
-            return False
-
-        pos = Position(x, y)
-        cached_check = tile_cache.get(pos, None)
-
-        if cached_check is not None:
-            return cached_check
-
-        if pos in outline:
-            tile_cache[pos] = True
-            return True
-
-        x_ranges = x_bounds.get(y, None)
-        if not x_ranges:
-            tile_cache[pos] = False
-            return False
-
-        hits = 0
-        for cx in x_ranges:
-            if cx > x:
-                hits += 1
-
-        hit_check = is_inside(hits)
-        tile_cache[pos] = hit_check
-        return hit_check
+    x_indices = {x: i for i, x in enumerate(x_options)}
+    y_indices = {y: i for i, y in enumerate(y_options)}
 
     for pair in get_tile_pairs(tile_positions):
-        area = get_area(pair)
-        if area <= max_area:
+        new_area = area(pair)
+        if new_area <= max_area:
             continue
 
-        count += 1
+        a_edge = edge_index(pair.a, x_indices, y_indices)
+        b_edge = edge_index(pair.b, x_indices, y_indices)
 
-        if x_bounds is None:
-            max_area = area
+        if not a_edge:
             continue
 
-        is_in_bounds = True
-        a, b = pair
+        if not b_edge:
+            continue
 
-        start_x, end_x = (a.x, b.x) if a.x <= b.x else (b.x, a.x)
-        start_y, end_y = (a.y, b.y) if a.y <= b.y else (b.y, a.y)
+        start_x, end_x = min_max(a_edge.x, b_edge.x)
+        start_y, end_y = min_max(a_edge.y, b_edge.y)
 
-        if count % 1_000 == 0:
-            print('checking bounds', count)
-
-        for y in range(start_y, end_y + 1):
-            if not is_tile(start_x, y):
-                is_in_bounds = False
-                break
-
-            if not is_tile(end_x, y):
-                is_in_bounds = False
-                break
+        is_in_bounds = all(
+            inside_map[y][x]
+            for y in range(start_y, end_y + 1)
+            for x in range(start_x, end_x + 1)
+        )
 
         if is_in_bounds:
-            max_area = area
-
-    print('finished area')
+            max_area = new_area
 
     return max_area
 
 
-def get_area(pair: PositionPair) -> int:
+def is_inside(x: int, y: int, y_edges: dict[int, list[int]]) -> bool:
+    edges = y_edges.get(y, None)
+    if not edges:
+        return False
+
+    hits = 0
+    for ex in edges:
+        if ex > x:
+            hits += 1
+
+    return hits & 1 == 1
+
+
+def min_max(a: int, b: int) -> Range:
+    low = min(a, b)
+    high = max(a, b)
+    return Range(low, high)
+
+
+def area(pair: PositionPair) -> int:
     a, b = pair
     x_dist = abs(a.x - b.x) + 1
     y_dist = abs(a.y - b.y) + 1
     return x_dist * y_dist
 
 
-def is_inside(num_collisions: int) -> bool:
-    return num_collisions & 1 == 1
+def edge_index(
+    pos: Position, x_edges: dict[int, int], y_edges: dict[int, int]
+) -> Optional[Position]:
+    x_edge = x_edges.get(pos.x, None)
+    y_edge = y_edges.get(pos.y, None)
+
+    if x_edge is None:
+        return None
+
+    if y_edge is None:
+        return None
+
+    return Position(x_edge, y_edge)
 
 
 def get_tile_pairs(tile_positions: list[Position]) -> Iterable[PositionPair]:
-    tile_positions = sorted(tile_positions)
     for i in range(len(tile_positions)):
         a = tile_positions[i]
-        for j in range(i, len(tile_positions)):
+        for j in range(i + 1, len(tile_positions)):
             b = tile_positions[j]
             yield PositionPair(a, b)
 
 
-def trace_outline(tile_positions: list[Position]) -> Optional[set[Position]]:
-    positions_by_x = defaultdict[int, list[int]](list)
-    positions_by_y = defaultdict[int, list[int]](list)
-
-    for x, y in tile_positions:
-        positions_by_x[x].append(y)
-        positions_by_y[y].append(x)
-
+def trace_outline(tile_positions: list[Position]) -> set[Position]:
+    # assume that the positions are ordered by adjacent
     outline_positions = set[Position]()
 
-    for x, y in tile_positions:
-        possible_up = []
-        possible_down = []
-        added_y = False
+    if not tile_positions:
+        return outline_positions
 
-        for py in positions_by_x[x]:
-            if py > y:
-                possible_up.append(py)
-            elif py < y:
-                possible_down.append(py)
+    if len(tile_positions) < 2:
+        outline_positions.update(tile_positions)
+        return outline_positions
 
-        if is_inside(len(possible_up)):
-            end_y = min(possible_up)
-            outline_positions.update(Position(x, ty) for ty in range(y, end_y + 1))
-            added_y = True
+    p1 = tile_positions[-1]
+    outline_positions.add(p1)
 
-        if is_inside(len(possible_down)):
-            start_y = max(possible_down)
-            outline_positions.update(Position(x, ty) for ty in range(start_y, y + 1))
-            added_y = True
+    for p2 in tile_positions:
+        x1, y1 = p1
+        x2, y2 = p2
+        outline_positions.add(p2)
 
-        if not added_y:
-            return None
+        if x1 == x2:
+            start_y, end_y = min_max(y1, y2)
+            outline_positions.update(
+                Position(x1, ty) for ty in range(start_y, end_y + 1)
+            )
+        elif y1 == y2:
+            start_x, end_x = min_max(x1, x2)
+            outline_positions.update(
+                Position(tx, y1) for tx in range(start_x, end_x + 1)
+            )
 
-        possible_left = []
-        possible_right = []
-        added_x = False
-
-        for px in positions_by_y[y]:
-            if px < x:
-                possible_left.append(px)
-            elif px > x:
-                possible_right.append(px)
-
-        if is_inside(len(possible_left)):
-            start_x = max(possible_left)
-            outline_positions.update(Position(tx, y) for tx in range(start_x, x + 1))
-            added_x = True
-
-        if is_inside(len(possible_right)):
-            end_x = min(possible_right)
-            outline_positions.update(Position(tx, y) for tx in range(x, end_x + 1))
-            added_x = True
-
-        if not added_x:
-            return None
+        p1 = p2
 
     return outline_positions
 
 
-def get_x_bounds(outline: Optional[set[Position]]) -> dict[int, list[int]]:
-    x_bounds = dict[int, list[int]]()
-    if not outline:
-        return x_bounds
+def map_edges(tiles: list[Position], ys: list[int]) -> dict[int, list[int]]:
+    y_edges = defaultdict[int, list[int]](list)
+    p1 = tiles[-1]
 
-    outline_by_y = defaultdict[int, list[int]](list)
-    for x, y in outline:
-        outline_by_y[y].append(x)
+    for p2 in tiles:
+        x1, y1 = p1
+        x2, y2 = p2
 
-    for y, xs in outline_by_y.items():
-        if len(xs) < 2:
-            continue
+        if x1 == x2:
+            start_y, end_y = min_max(y1, y2)
+            for ey in ys:
+                if start_y < ey <= end_y:
+                    y_edges[ey].append(x1)
 
-        xs = sorted(xs)
-        dedupe_xs = [xs[0]]
+        p1 = p2
 
-        for i in range(1, len(xs) - 1):
-            curr_x = xs[i]
-            last_x = xs[i-1]
-            next_x = xs[i+1]
-
-            if curr_x > last_x + 1:
-                dedupe_xs.append(curr_x)
-                continue
-
-            if curr_x < next_x - 1:
-                dedupe_xs.append(curr_x)
-                continue
-
-        dedupe_xs.append(xs[-1])
-        x_bounds[y] = dedupe_xs
-
-    return x_bounds
+    return y_edges
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = ArgumentParser()
-    parser.add_argument('tile_map')
-    parser.add_argument('-o', '--outline', action='store_true')
+    parser.add_argument("tile_map")
+    parser.add_argument("-o", "--outline", action="store_true")
     args = parser.parse_args()
 
     positions = read_tile_positions(args.tile_map)
-    max_area = find_largest_area(positions, args.outline)
+    max_area = (
+        find_largest_area_outline(positions)
+        if args.outline
+        else find_largest_area_all(positions)
+    )
     print(max_area)
