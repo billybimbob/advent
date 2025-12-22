@@ -11,6 +11,14 @@ class Position(NamedTuple):
     y: int
 
 
+class Range(NamedTuple):
+    start: int
+    end: int
+
+    def in_bounds(self, start: int, end: int) -> bool:
+        return self.start <= start and self.end >= end
+
+
 class PositionPair(NamedTuple):
     a: Position
     b: Position
@@ -36,47 +44,55 @@ def find_largest_area(tile_positions: list[Position], only_outline: bool) -> int
 
     if only_outline:
         outline = trace_outline(tile_positions)
-        print('traced with', None if outline is None else len(outline))
-        allowed_tiles = fill_outline(outline)
-        print('fill with', len(allowed_tiles))
+        x_bounds = get_x_bounds(outline)
     else:
-        allowed_tiles = None
+        x_bounds = None
 
-    if allowed_tiles is not None and not allowed_tiles:
+    if only_outline and not x_bounds:
         return 0
 
     max_area = 0
+    print('getting max area')
+    count = 0
+    checks = 0
 
     for pair in get_tile_pairs(tile_positions):
         area = get_area(pair)
         if area <= max_area:
             continue
 
-        if allowed_tiles is None:
+        count += 1
+
+        if x_bounds is None:
             max_area = area
             continue
 
-        start_x, end_x = (a.x, b.x) if a.x <= b.y else (b.x, a.x)
-        all_allowed_x = all(
-            Position(x, a.y) in allowed_tiles and
-            Position(x, b.y) in allowed_tiles
-            for x in range(start_x, end_x + 1)
-        )
+        is_in_bounds = True
+        a, b = pair
 
-        if not all_allowed_x:
-            continue
-
+        start_x, end_x = (a.x, b.x) if a.x <= b.x else (b.x, a.x)
         start_y, end_y = (a.y, b.y) if a.y <= b.y else (b.y, a.y)
-        all_allowed_y = all(
-            Position(a.x, y) in allowed_tiles and
-            Position(b.x, y) in allowed_tiles
-            for y in range(start_y, end_y + 1)
-        )
 
-        if not all_allowed_y:
-            continue
+        if count % 1_000 == 0:
+            print('checking bounds', checks)
+            checks = 0
 
-        max_area = area
+        for y in range(start_y, end_y + 1):
+            x_ranges = x_bounds.get(y, None)
+            if not x_ranges:
+                is_in_bounds = False
+                break
+
+            checks += len(x_ranges)
+
+            if any(not b.in_bounds(start_x, end_x) for b in x_ranges):
+                is_in_bounds = False
+                break
+
+        if is_in_bounds:
+            max_area = area
+
+    print('finished area')
 
     return max_area
 
@@ -89,7 +105,7 @@ def get_area(pair: PositionPair) -> int:
 
 
 def is_inside(num_collisions: int) -> bool:
-    return num_collisions % 2 == 1
+    return num_collisions & 1 == 1
 
 
 def get_tile_pairs(tile_positions: list[Position]) -> Iterable[PositionPair]:
@@ -100,106 +116,102 @@ def get_tile_pairs(tile_positions: list[Position]) -> Iterable[PositionPair]:
             b = tile_positions[j]
             yield PositionPair(a, b)
 
-def trace_outline(tile_positions: list[Position]) -> Optional[list[Position]]:
-    positions_by_x = defaultdict[int, list[Position]](list)
-    positions_by_y = defaultdict[int, list[Position]](list)
 
-    for pos in tile_positions:
-        positions_by_x[pos.x].append(pos)
-        positions_by_y[pos.y].append(pos)
+def trace_outline(tile_positions: list[Position]) -> Optional[set[Position]]:
+    positions_by_x = defaultdict[int, list[int]](list)
+    positions_by_y = defaultdict[int, list[int]](list)
+
+    for x, y in tile_positions:
+        positions_by_x[x].append(y)
+        positions_by_y[y].append(x)
 
     outline_positions = set[Position]()
 
-    for pos in tile_positions:
-        possible_left = [pl for pl in positions_by_y[pos.y] if pl.x < pos.x]
-        possible_right = [pr for pr in positions_by_y[pos.y] if pr.x > pos.x]
-
-        possible_up = [pu for pu in positions_by_x[pos.x] if pu.y > pos.y]
-        possible_down = [pd for pd in positions_by_x[pos.x] if pd.y < pos.y]
-
-        added_x = False
+    for x, y in tile_positions:
+        possible_up = []
+        possible_down = []
         added_y = False
 
-        if is_inside(len(possible_left)):
-            target_left = max(possible_left, key=lambda p: p.x)
-            if target_left.y != pos.y:
-                return None
+        for py in positions_by_x[x]:
+            if py > y:
+                possible_up.append(py)
+            elif py < y:
+                possible_down.append(py)
 
-            outline_positions.update(Position(x, pos.y) for x in range(target_left.x, pos.x + 1))
+        if is_inside(len(possible_up)):
+            end_y = min(possible_up)
+            outline_positions.update(Position(x, ty) for ty in range(y, end_y + 1))
+            added_y = True
+
+        if is_inside(len(possible_down)):
+            start_y = max(possible_down)
+            outline_positions.update(Position(x, ty) for ty in range(start_y, y + 1))
+            added_y = True
+
+        if not added_y:
+            return None
+
+        possible_left = []
+        possible_right = []
+        added_x = False
+
+        for px in positions_by_y[y]:
+            if px < x:
+                possible_left.append(px)
+            elif px > x:
+                possible_right.append(px)
+
+        if is_inside(len(possible_left)):
+            start_x = max(possible_left)
+            outline_positions.update(Position(tx, y) for tx in range(start_x, x + 1))
             added_x = True
 
         if is_inside(len(possible_right)):
-            target_right = min(possible_right, key=lambda p: p.x)
-            if target_right.y != pos.y:
-                return None
-
-            outline_positions.update(Position(x, pos.y) for x in range(pos.x, target_right.x + 1))
+            end_x = min(possible_right)
+            outline_positions.update(Position(tx, y) for tx in range(x, end_x + 1))
             added_x = True
 
-        if is_inside(len(possible_up)):
-            target_up = min(possible_up, key=lambda p: p.y)
-            if target_up.x != pos.x:
-                return None
-
-            outline_positions.update(Position(pos.x, y) for y in range(pos.y, target_up.y + 1))
-            added_y = True
-
-        if possible_down:
-            target_down = max(possible_down, key=lambda p: p.y)
-            if target_down.x != pos.x:
-                return None
-
-            outline_positions.update(Position(pos.x, y) for y in range(target_down.y, pos.y + 1))
-            added_y = True
-
         if not added_x:
-            return None
-
-        if not added_y:
             return None
 
     return outline_positions
 
 
-def fill_outline(outline_positions: Optional[set[Position]]) -> set[Position]:
-    fill_positions = set[Position]()
+def get_x_bounds(outline: Optional[set[Position]]) -> dict[int, list[Range]]:
+    x_bounds = dict[int, list[Range]]()
 
-    if not outline_positions:
-        return fill_positions
+    if not outline:
+        return x_bounds
 
-    return fill_positions
+    outline_by_y = defaultdict[int, list[int]](list)
+    for x, y in outline:
+        outline_by_y[y].append(x)
 
-    outline_by_y = dict[int, set[int]]()
-
-    for out_p in outline_positions:
-        fill_positions.add(out_p)
-
-        if out_p.y in outline_by_y:
-            outline_by_y[out_p.y].add(out_p.x)
-        else:
-            outline_by_y[out_p.y] = {out_p.x}
-
-    for out_x, out_y in outline_positions:
-        bound_xs = outline_by_y[out_y]
-        if not bound_xs:
+    for y, xs in outline_by_y.items():
+        if len(xs) < 2:
             continue
 
-        if Position(out_x + 1, out_y) not in fill_positions:
-            right_xs = [b for b in bound_xs if b > out_x]
+        xs = sorted(xs)
 
-            # ray cast position right, and if even outlines hit, it's outside
-            if is_inside(len(right_xs)):
-                end_x = min(right_xs)
-                fill_positions.update(Position(x, out_y) for x in range(out_x + 1, end_x))
+        for i in range(len(xs) - 1):
+            start, end = xs[i], xs[i + 1]
 
-        if Position(out_x - 1, out_y) not in fill_positions:
-            left_xs = [b for b in bound_xs if b < out_x]
+            if y not in x_bounds:
+                x_bounds[y] = [Range(start, end)]
+                continue
 
-            if is_inside(len(left_xs)):
-                end_x = max(left_xs)
-                fill_positions.update(Position(x, out_y) for x in range(end_x, out_x, -1))
+            target_ranges = x_bounds[y]
+            last_range = target_ranges[-1]
 
-    return fill_positions
+            if start == last_range.end:
+                target_ranges.pop()
+                target_ranges.append(Range(last_range.start, end))
+                continue
+
+            if not is_inside(len(target_ranges)):
+                target_ranges.append(Range(start, end))
+
+    return x_bounds
 
 
 if __name__ == '__main__':
