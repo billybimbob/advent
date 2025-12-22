@@ -11,14 +11,6 @@ class Position(NamedTuple):
     y: int
 
 
-class Range(NamedTuple):
-    start: int
-    end: int
-
-    def in_bounds(self, start: int, end: int) -> bool:
-        return self.start <= start and self.end >= end
-
-
 class PositionPair(NamedTuple):
     a: Position
     b: Position
@@ -53,8 +45,37 @@ def find_largest_area(tile_positions: list[Position], only_outline: bool) -> int
 
     max_area = 0
     print('getting max area')
+
+    tile_cache = dict[Position, bool]()
     count = 0
-    checks = 0
+
+    def is_tile(x: int, y: int) -> bool:
+        if not outline:
+            return False
+
+        pos = Position(x, y)
+        cached_check = tile_cache.get(pos, None)
+
+        if cached_check is not None:
+            return cached_check
+
+        if pos in outline:
+            tile_cache[pos] = True
+            return True
+
+        x_ranges = x_bounds.get(y, None)
+        if not x_ranges:
+            tile_cache[pos] = False
+            return False
+
+        hits = 0
+        for cx in x_ranges:
+            if cx > x:
+                hits += 1
+
+        hit_check = is_inside(hits)
+        tile_cache[pos] = hit_check
+        return hit_check
 
     for pair in get_tile_pairs(tile_positions):
         area = get_area(pair)
@@ -74,18 +95,14 @@ def find_largest_area(tile_positions: list[Position], only_outline: bool) -> int
         start_y, end_y = (a.y, b.y) if a.y <= b.y else (b.y, a.y)
 
         if count % 1_000 == 0:
-            print('checking bounds', checks)
-            checks = 0
+            print('checking bounds', count)
 
         for y in range(start_y, end_y + 1):
-            x_ranges = x_bounds.get(y, None)
-            if not x_ranges:
+            if not is_tile(start_x, y):
                 is_in_bounds = False
                 break
 
-            checks += len(x_ranges)
-
-            if any(not b.in_bounds(start_x, end_x) for b in x_ranges):
+            if not is_tile(end_x, y):
                 is_in_bounds = False
                 break
 
@@ -177,9 +194,8 @@ def trace_outline(tile_positions: list[Position]) -> Optional[set[Position]]:
     return outline_positions
 
 
-def get_x_bounds(outline: Optional[set[Position]]) -> dict[int, list[Range]]:
-    x_bounds = dict[int, list[Range]]()
-
+def get_x_bounds(outline: Optional[set[Position]]) -> dict[int, list[int]]:
+    x_bounds = dict[int, list[int]]()
     if not outline:
         return x_bounds
 
@@ -192,24 +208,23 @@ def get_x_bounds(outline: Optional[set[Position]]) -> dict[int, list[Range]]:
             continue
 
         xs = sorted(xs)
+        dedupe_xs = [xs[0]]
 
-        for i in range(len(xs) - 1):
-            start, end = xs[i], xs[i + 1]
+        for i in range(1, len(xs) - 1):
+            curr_x = xs[i]
+            last_x = xs[i-1]
+            next_x = xs[i+1]
 
-            if y not in x_bounds:
-                x_bounds[y] = [Range(start, end)]
+            if curr_x > last_x + 1:
+                dedupe_xs.append(curr_x)
                 continue
 
-            target_ranges = x_bounds[y]
-            last_range = target_ranges[-1]
-
-            if start == last_range.end:
-                target_ranges.pop()
-                target_ranges.append(Range(last_range.start, end))
+            if curr_x < next_x - 1:
+                dedupe_xs.append(curr_x)
                 continue
 
-            if not is_inside(len(target_ranges)):
-                target_ranges.append(Range(start, end))
+        dedupe_xs.append(xs[-1])
+        x_bounds[y] = dedupe_xs
 
     return x_bounds
 
